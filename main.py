@@ -2,7 +2,7 @@ from flask import Flask, render_template, redirect, request, abort, make_respons
 from data import db_session, activities_resources, users_resources
 from data.users import User
 from data.activities import Activities
-from forms.user import RegisterForm, LoginForm, DetailsForm
+from forms.user_forms import RegisterForm, LoginForm, DetailsForm
 from forms.activities import ActivityForm
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from flask_restful import abort, Api
@@ -24,12 +24,22 @@ def load_user(user_id):
 @app.route("/")
 def index():
     db_sess = db_session.create_session()
+    bmr = 0
     if current_user.is_authenticated:
+        if not current_user.entered_details:
+            return redirect('/details')
         activities = db_sess.query(Activities).filter(
-            (Activities.user == current_user) | (Activities.is_private != True))
+            (Activities.user == current_user) | (Activities.is_private is not True))
+        cs = {
+            'M': [66.5, 13.75, 5.003, 6.75],
+            'F': [655.1, 9.563, 1.850, 4.676]
+        }
+        c = cs[current_user.gender]
+        bmr = c[0] + c[1] * current_user.weight + c[2] * current_user.height - c[3] * current_user.age
     else:
-        activities = db_sess.query(Activities).filter(Activities.is_private != True)
-    return render_template("index.html", activities=activities)
+        activities = db_sess.query(Activities).filter(Activities.is_private is not True)
+    return render_template("index.html", activities=activities, bmr=bmr)
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def reqister():
@@ -48,20 +58,34 @@ def reqister():
             name=form.name.data,
             email=form.email.data,
             about=form.about.data,
+            entered_details=False,
         )
         user.set_password(form.password.data)
         db_sess.add(user)
         db_sess.commit()
-        return redirect('/login')
+        return redirect('/details')
     return render_template('register.html', form=form)
+
 
 @app.route("/details", methods=['GET', 'POST'])
 def details():
+    if not current_user.is_authenticated:
+        return redirect('/register')
+    if current_user.entered_details:
+        return redirect('/')
     form = DetailsForm()
     if form.validate_on_submit():
         db_sess = db_session.create_session()
+        usr = db_sess.query(User).get(current_user.id)
+        usr.age = form.age.data
+        usr.weight = form.weight.data
+        usr.height = form.height.data
+        usr.gender = form.gender.data
+        usr.entered_details = True
+        db_sess.add(usr)
         db_sess.commit()
-    return render_template('details.html')
+        return redirect('/')
+    return render_template('details.html', form=form)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -110,8 +134,8 @@ def view_activity(id):
     form = ActivityForm()
     db_sess = db_session.create_session()
     activities = db_sess.query(Activities).filter(Activities.id == id,
-                                      Activities.user == current_user
-                                      ).first()
+                                                  Activities.user == current_user
+                                                  ).first()
     if activities:
         form.title.data = activities.title
         form.content.data = activities.content
@@ -123,19 +147,22 @@ def view_activity(id):
                            form=form
                            )
 
+
 api.add_resource(activities_resources.ActivitiesListResource, '/api/activities')
 api.add_resource(activities_resources.ActivitiesResource, '/api/activities/<int:activities_id>')
 api.add_resource(users_resources.UsersListResource, '/api/users')
 api.add_resource(users_resources.UsersResource, '/api/users/<int:user_id>')
 
+
 def main():
     db_session.global_init("db/users.sqlite")
     app.run(host='0.0.0.0')
+
 
 @app.errorhandler(404)
 def not_found(error):
     return make_response(jsonify({'error': 'Not found!!!'}), 404)
 
+
 if __name__ == '__main__':
     main()
-
